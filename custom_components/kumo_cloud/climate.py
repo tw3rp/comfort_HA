@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from typing import Any
 
 from homeassistant.components.climate import (
@@ -41,6 +42,33 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _log_temp_context(
+    device: KumoCloudDevice, where: str, extra: dict[str, Any] | None = None
+) -> None:
+    """Debug trace: log adapter vs device setpoints (TEMPTRACE)."""
+    adapter = device.zone_data.get("adapter", {})
+    device_data = device.device_data
+    _LOGGER.info(
+        "[TEMPTRACE] %s zone=%s serial=%s mode=%s "
+        "adapter(spHeat=%s spCool=%s roomTemp=%s power=%s) "
+        "device(spHeat=%s spCool=%s roomTemp=%s power=%s) extra=%s",
+        where,
+        device.zone_id,
+        device.device_serial,
+        device_data.get("operationMode", adapter.get("operationMode")),
+        adapter.get("spHeat"),
+        adapter.get("spCool"),
+        adapter.get("roomTemp"),
+        adapter.get("power"),
+        device_data.get("spHeat"),
+        device_data.get("spCool"),
+        device_data.get("roomTemp"),
+        device_data.get("power"),
+        extra or {},
+    )
+
 
 # Mapping from Kumo Cloud operation modes to Home Assistant HVAC modes
 KUMO_TO_HVAC_MODE = {
@@ -383,13 +411,30 @@ class KumoCloudClimate(CoordinatorEntity, ClimateEntity):
 
     async def _send_command_and_refresh(self, commands: dict[str, Any]) -> None:
         """Send command and ensure fresh status update."""
+        _log_temp_context(
+            self.device, "_send_command_and_refresh BEFORE", {"commands": commands}
+        )
+        stack = "".join(traceback.format_stack(limit=8))
+        _LOGGER.info(
+            "[TEMPTRACE] command caller stack for %s:\n%s",
+            self.device.device_serial,
+            stack,
+        )
+
         await self.device.send_command(commands)
-        # The device.send_command method now handles refreshing the device status
-        # Also trigger a state update for this entity to reflect changes immediately
+
+        _log_temp_context(
+            self.device, "_send_command_and_refresh AFTER", {"commands": commands}
+        )
         self.async_write_ha_state()
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new target HVAC mode."""
+        _log_temp_context(
+            self.device,
+            "async_set_hvac_mode ENTRY",
+            {"requested_hvac_mode": str(hvac_mode)},
+        )
         if hvac_mode == HVACMode.OFF:
             await self._send_command_and_refresh({"operationMode": OPERATION_MODE_OFF})
         else:
@@ -410,62 +455,91 @@ class KumoCloudClimate(CoordinatorEntity, ClimateEntity):
                 if sp_heat is not None:
                     commands["spHeat"] = sp_heat
 
+                _LOGGER.info(
+                    "[TEMPTRACE] async_set_hvac_mode built commands zone=%s serial=%s commands=%s",
+                    self.device.zone_id,
+                    self.device.device_serial,
+                    commands,
+                )
                 await self._send_command_and_refresh(commands)
-
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
         adapter = self.device.zone_data.get("adapter", {})
         device_data = self.device.device_data
         commands: dict[str, Any] = {}
-    
+
+        _log_temp_context(self.device, "async_set_temperature ENTRY", {"kwargs": kwargs})
+
         # Range set (preferred for HEAT_COOL / auto)
         low = kwargs.get(ATTR_TARGET_TEMP_LOW)
         high = kwargs.get(ATTR_TARGET_TEMP_HIGH)
-    
+
         if low is not None or high is not None:
-            # Don’t clobber the other side if caller only sets one
             current_low = device_data.get("spHeat", adapter.get("spHeat"))
             current_high = device_data.get("spCool", adapter.get("spCool"))
-    
+
             if low is None:
                 low = current_low
             if high is None:
                 high = current_high
-    
+
             if low is not None:
                 commands["spHeat"] = low
             if high is not None:
                 commands["spCool"] = high
-    
+
+            _LOGGER.info(
+                "[TEMPTRACE] async_set_temperature RANGE zone=%s serial=%s "
+                "requested_low=%s requested_high=%s current_low=%s current_high=%s commands=%s",
+                self.device.zone_id,
+                self.device.device_serial,
+                kwargs.get(ATTR_TARGET_TEMP_LOW),
+                kwargs.get(ATTR_TARGET_TEMP_HIGH),
+                current_low,
+                current_high,
+                commands,
+            )
+
             if commands:
                 await self._send_command_and_refresh(commands)
             return
-    
-        # Single setpoint (heat/cool modes)
+
         target_temp = kwargs.get(ATTR_TEMPERATURE)
         if target_temp is None:
+            _LOGGER.info(
+                "[TEMPTRACE] async_set_temperature EXIT no target temp kwargs=%s", kwargs
+            )
             return
-    
+
         hvac_mode = self.hvac_mode
-    
+
         if hvac_mode == HVACMode.COOL:
             commands["spCool"] = target_temp
             sp_heat = device_data.get("spHeat", adapter.get("spHeat"))
             if sp_heat is not None:
                 commands["spHeat"] = sp_heat
-    
+
         elif hvac_mode == HVACMode.HEAT:
             commands["spHeat"] = target_temp
             sp_cool = device_data.get("spCool", adapter.get("spCool"))
             if sp_cool is not None:
                 commands["spCool"] = sp_cool
-    
+
         elif hvac_mode == HVACMode.HEAT_COOL:
-            # If HA sends only a single number in heat_cool, keep your old behavior.
             commands["spCool"] = target_temp
             commands["spHeat"] = target_temp - 2
-    
+
+        _LOGGER.info(
+            "[TEMPTRACE] async_set_temperature SINGLE zone=%s serial=%s "
+            "hvac_mode=%s target_temp=%s commands=%s",
+            self.device.zone_id,
+            self.device.device_serial,
+            hvac_mode,
+            target_temp,
+            commands,
+        )
+
         if commands:
             await self._send_command_and_refresh(commands)
 

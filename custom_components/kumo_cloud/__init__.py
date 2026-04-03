@@ -203,8 +203,28 @@ class KumoCloudDataUpdateCoordinator(DataUpdateCoordinator):
     async def async_refresh_device(self, device_serial: str) -> None:
         """Refresh a specific device's data immediately."""
         try:
-            # Get fresh device details
+            old_detail = dict(self.devices.get(device_serial, {}))
+
             device_detail = await self.api.get_device_details(device_serial)
+
+            _LOGGER.info(
+                "[TEMPTRACE] refresh_device serial=%s "
+                "OLD(spHeat=%s spCool=%s roomTemp=%s power=%s mode=%s updatedAt=%s) "
+                "NEW(spHeat=%s spCool=%s roomTemp=%s power=%s mode=%s updatedAt=%s)",
+                device_serial,
+                old_detail.get("spHeat"),
+                old_detail.get("spCool"),
+                old_detail.get("roomTemp"),
+                old_detail.get("power"),
+                old_detail.get("operationMode"),
+                old_detail.get("updatedAt"),
+                device_detail.get("spHeat"),
+                device_detail.get("spCool"),
+                device_detail.get("roomTemp"),
+                device_detail.get("power"),
+                device_detail.get("operationMode"),
+                device_detail.get("updatedAt"),
+            )
 
             # Update the cached device data
             self.devices[device_serial] = device_detail
@@ -309,7 +329,11 @@ class KumoCloudDevice:
         try:
             # Send the command
             await self.coordinator.api.send_command(self.device_serial, commands)
-            _LOGGER.debug("Sent command to device %s: %s", self.device_serial, commands)
+            _LOGGER.info(
+                "[TEMPTRACE] api.send_command serial=%s commands=%s",
+                self.device_serial,
+                commands,
+            )
 
             # Wait a moment for the command to be processed
             await asyncio.sleep(1)
