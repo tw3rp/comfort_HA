@@ -407,7 +407,8 @@ class KumoCloudClimate(CoordinatorEntity, ClimateEntity):
             and self.coordinator.data is not None
         )
         # Only mark unavailable if we have no data at all
-        return has_data and self.device.available
+        # return has_data and self.device.available
+        return bool(has_data)
 
     async def _send_command_and_refresh(self, commands: dict[str, Any]) -> None:
         """Send command and ensure fresh status update."""
