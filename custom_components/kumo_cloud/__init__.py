@@ -336,7 +336,7 @@ class KumoCloudDevice:
             )
 
             # Wait a moment for the command to be processed
-            await asyncio.sleep(1)
+            await asyncio.sleep(10)
 
             # Refresh this specific device's data immediately
             await self.coordinator.async_refresh_device(self.device_serial)
